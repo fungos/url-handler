@@ -1,0 +1,9 @@
+[[handler]]
+scheme = "customapp"
+command = "%APPDIR%/customapp.exe"
+args = "\"%0\" %1"
+
+[[handler]]
+scheme = "ls"
+command = "ls"
+args = "%0"

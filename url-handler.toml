@@ -1,9 +1,14 @@
 [[handler]]
+scheme = "xyz"
+command = "%XYZ_HOME%\\openxyz.exe"
+args = "%1.xyz --scale={scale}"
+
+[[handler]]
 scheme = "customapp"
-command = "%APPDIR%/customapp.exe"
+command = "%APPDIR%\\customapp.exe"
 args = "\"%1\" %2"
 
 [[handler]]
 scheme = "ls"
-command = "ls"
-args = "%1 {key}"
+command = "/bin/ls"
+args = "%1 \"%2\" /home \"/some quoted path\""

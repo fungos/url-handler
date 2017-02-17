@@ -41,9 +41,9 @@ fn load_config(cfg: &str) -> Result<Config> {
     toml::from_str(&*contents).chain_err(|| "Could not load config file.")
 }
 
-fn run_command(cmd: &str, args: Vec<&str>) -> Result<()> {
-    Command::new(cmd).args(args).output()?;
-    Ok(())
+fn run_command(cmd: &str, args: Vec<String>) -> Result<i32> {
+    let output = Command::new(cmd).args(args).output()?;
+    Ok(output.status.code().unwrap_or(-1))
 }
 
 // Expand system environment variables, ie. %USERNAME%
@@ -86,6 +86,17 @@ fn expand_args(str: &str, argv: Vec<&str>) -> String {
     args
 }
 
+// Split a string containing space separated args into a vector considering quoted strings with spaces
+fn split_args(args: &str) -> Vec<String> {
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r#"[^\s"']+|"([^"]*)"|'([^']*)'"#).unwrap();
+    }
+    RE.captures_iter(args)
+        .map(|cap| String::from(&cap[0]))
+        .map(|str| String::from(str.trim_matches('"')))
+        .collect()
+}
+
 // Anything after the scheme and before parameters "?" is considered a numbered argument
 fn get_args(url: &Url) -> Vec<&str> {
     if url.cannot_be_a_base() {
@@ -95,7 +106,7 @@ fn get_args(url: &Url) -> Vec<&str> {
     }
 }
 
-fn run(arg: &str, cfg: &str) -> Result<()> {
+fn run(arg: &str, cfg: &str) -> Result<i32> {
     let config = load_config(cfg)?;
 
     let url = Url::parse(arg)?;
@@ -113,11 +124,10 @@ fn run(arg: &str, cfg: &str) -> Result<()> {
     let args_expanded = expand_named(handler.args, &url);
     let args_expanded = expand_args(&*args_expanded, args);
     let args_expanded = expand_env(&*args_expanded)?;
-    let args_expanded = args_expanded.split(' ').collect::<Vec<_>>();
     let cmd_expanded = &*expand_env(&*handler.command)?;
 
     //println!("{} {:?}", cmd_expanded, args_expanded);
-    run_command(&*cmd_expanded, args_expanded)
+    run_command(&*cmd_expanded, split_args(&*args_expanded))
 }
 
 fn main() {
@@ -135,26 +145,28 @@ fn main() {
         ::std::process::exit(0);
     }
 
-    let url_arg = matches.value_of("URL").unwrap(); // URL is required an will always be Some
+    let url_arg = matches.value_of("URL").unwrap(); // URL is required and will always be Some
     let config_file = matches.value_of("CONFIG").unwrap_or(CONFIG_FILE_NAME);
 
-    if let Err(ref e) = run(url_arg, config_file) {
-        use ::std::io::Write;
-        let stderr = &mut ::std::io::stderr();
-        let err_msg = "Error writing to stderr";
-        writeln!(stderr, "error: {}", e).expect(err_msg);
+    let code = match run(url_arg, config_file) {
+        Err(ref e) => {
+            use ::std::io::Write;
+            let stderr = &mut ::std::io::stderr();
+            let err_msg = "Error writing to stderr";
+            writeln!(stderr, "error: {}", e).expect(err_msg);
 
-        for e in e.iter().skip(1) {
-            writeln!(stderr, "caused by: {}", e).expect(err_msg);
+            for e in e.iter().skip(1) {
+                writeln!(stderr, "caused by: {}", e).expect(err_msg);
+            }
+
+            // To enable backtrace run with `RUST_BACKTRACE=1`.
+            if let Some(backtrace) = e.backtrace() {
+                writeln!(stderr, "backtrace: {:?}", backtrace).expect(err_msg);
+            }
+            -1
         }
+        Ok(c) => c
+    };
 
-        // To enable backtrace run with `RUST_BACKTRACE=1`.
-        if let Some(backtrace) = e.backtrace() {
-            writeln!(stderr, "backtrace: {:?}", backtrace).expect(err_msg);
-        }
-
-        ::std::process::exit(-1);
-    }
-
-    ::std::process::exit(0);
+    ::std::process::exit(code);
 }

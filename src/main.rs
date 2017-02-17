@@ -41,7 +41,7 @@ fn load_config(cfg: &str) -> Result<Config> {
     toml::from_str(&*contents).chain_err(|| "Could not load config file.")
 }
 
-fn run_command(cmd: &str, args: Vec<String>) -> Result<i32> {
+fn run_command(cmd: &str, args: Vec<&str>) -> Result<i32> {
     let output = Command::new(cmd).args(args).output()?;
     Ok(output.status.code().unwrap_or(-1))
 }
@@ -87,13 +87,12 @@ fn expand_args(str: &str, argv: Vec<&str>) -> String {
 }
 
 // Split a string containing space separated args into a vector considering quoted strings with spaces
-fn split_args(args: &str) -> Vec<String> {
+fn split_args<'a>(args: &'a str) -> Vec<&'a str> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r#"[^\s"']+|"([^"]*)"|'([^']*)'"#).unwrap();
     }
     RE.captures_iter(args)
-        .map(|cap| String::from(&cap[0]))
-        .map(|str| String::from(str.trim_matches('"')))
+        .map(|cap| cap.get(0).unwrap().as_str().trim_matches('"'))
         .collect()
 }
 

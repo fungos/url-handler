@@ -1,9 +1,9 @@
 [[handler]]
 scheme = "customapp"
 command = "%APPDIR%/customapp.exe"
-args = "\"%0\" %1"
+args = "\"%1\" %2"
 
 [[handler]]
 scheme = "ls"
 command = "ls"
-args = "%0"
+args = "%1 {key}"

@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["Danny Angelo Carminati Grein <fungos@gmail.com>"]
 
 [dependencies]
-url = "1.4.0"
 toml = "0.3.0"
 clap = "2.20.3"
 error-chain = "0.9.0"
@@ -12,3 +11,11 @@ serde = "0.9.7"
 serde_derive = "0.9.7"
 regex = "0.2.1"
 lazy_static = "0.2.2"
+clippy = {version = "*", optional = true}
+
+[dependencies.url]
+version = "1.4.0"
+features = ["query_encoding"]
+
+[features]
+default = []

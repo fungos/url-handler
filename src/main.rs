@@ -1,26 +1,15 @@
+#![cfg_attr(feature="clippy", feature(plugin))]
+#![cfg_attr(feature="clippy", plugin(clippy))]
 #![recursion_limit = "1024"]
-#[macro_use] extern crate clap;
 #[macro_use] extern crate error_chain;
+#[macro_use] extern crate clap;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate lazy_static;
 extern crate regex;
 extern crate toml;
 extern crate url;
 
-mod errors {
-    error_chain! {
-        errors {
-            HandlerNotFound
-        }
-        foreign_links {
-            Url(::url::ParseError);
-            Io(::std::io::Error);
-            Toml(::toml::de::Error);
-            Env(::std::env::VarError);
-            Regex(::regex::Error);
-        }
-    }
-}
+mod errors;
 
 use errors::*;
 use std::env;
@@ -45,14 +34,14 @@ struct Handler {
 }
 
 fn load_config(cfg: &str) -> Result<Config> {
-    let mut config_file = fs::File::open(cfg)?;
+    let mut config_file = fs::File::open(cfg)
+        .chain_err(|| format!("couldn't find {}", cfg))?;
     let mut contents = String::new();
     config_file.read_to_string(&mut contents)?;
     toml::from_str(&*contents).chain_err(|| "Could not load config file.")
 }
 
-fn run_command(cmd: &str, args: Vec<String>) -> Result<()> {
-    //println!("Command: {} {}", cmd, args.join(" "));
+fn run_command(cmd: &str, args: Vec<&str>) -> Result<()> {
     Command::new(cmd).args(args).output()?;
     Ok(())
 }
@@ -66,22 +55,44 @@ fn expand_env(str: &str) -> Result<String> {
     for cap in RE.captures_iter(&*str) {
         let var = &cap[0];
         let clear = var.trim_matches('%');
-        let expanded = env::var(clear).chain_err(|| format!("{}", var))?;
+        let expanded = env::var(clear).chain_err(|| var)?;
         str_expanded = str_expanded.replace(var, &*expanded);
     }
 
     Ok(str_expanded)
 }
 
-// Expand arguments %0 %1 %2 ...
-fn expand_args(str: &str, argv: Vec<&str>) -> Result<Vec<String>> {
-    let mut args = String::from(str);
-    for(i, &item) in argv.iter().enumerate() {
-        let re_arg = Regex::new(&*format!("%{}", i))?;
-        args = re_arg.replace_all(&*args, &*item).into_owned();
+// Expand named parameters: {key} -> value
+fn expand_named(str: Option<String>, url: &Url) -> String {
+    match str {
+        Some(s) => {
+            let params = url.query_pairs();
+            let mut args = String::from(s);
+            for (k, v) in params {
+                args = str::replace(&*args, &*format!("{{{}}}", k), &*v);
+            }
+            args
+        },
+        None => String::new()
     }
-    let s = &*expand_env(&*args)?;
-    Ok(s.split(' ').map(|it| String::from(it)).collect())
+}
+
+// Expand arguments %0 %1 %2 ...
+fn expand_args(str: &str, argv: Vec<&str>) -> String {
+    let mut args = String::from(str);
+    for (i, &item) in argv.iter().enumerate() {
+        args = str::replace(&*args, &*format!("%{}", i + 1), &*item);
+    }
+    args
+}
+
+// Anything after the scheme and before parameters "?" is considered a numbered argument
+fn get_args(url: &Url) -> Vec<&str> {
+    if url.cannot_be_a_base() {
+        vec![url.host_str().unwrap_or("").into(), url.path().into()]
+    } else {
+        vec![url.host_str().unwrap_or("").into()]
+    }
 }
 
 fn run(arg: &str, cfg: &str) -> Result<()> {
@@ -90,25 +101,22 @@ fn run(arg: &str, cfg: &str) -> Result<()> {
     let url = Url::parse(arg)?;
     let scheme = url.scheme();
 
-    let handler = config.handler.into_iter().find(|ref it| it.scheme == scheme)
+    let handler = config.handler.into_iter()
+        .find(|it| it.scheme == scheme)
         .ok_or(ErrorKind::HandlerNotFound)?;
 
-    let mut input : Vec<&str> = if url.cannot_be_a_base() {
-        vec![url.host_str().unwrap_or("").into(), url.path().into()]
-    } else {
-        vec![url.host_str().unwrap_or("").into()]
-    };
+    let mut args = get_args(&url);
+    let mut paths = url.path_segments().map(|c| c.collect::<Vec<_>>()).unwrap_or_else(|| vec![]);
+    args.append(&mut paths);
+    args.retain(|e| !e.is_empty());
 
-    let mut paths = url.path_segments().map(|c| c.collect::<Vec<_>>()).unwrap_or(vec![]);
-    input.append(&mut paths);
-    input.retain(|ref e| !e.is_empty());
-
-    let args_expanded = match handler.args {
-        Some(args) => expand_args(&*args, input)?,
-        None => vec![]
-    };
+    let args_expanded = expand_named(handler.args, &url);
+    let args_expanded = expand_args(&*args_expanded, args);
+    let args_expanded = expand_env(&*args_expanded)?;
+    let args_expanded = args_expanded.split(' ').collect::<Vec<_>>();
     let cmd_expanded = &*expand_env(&*handler.command)?;
 
+    //println!("{} {:?}", cmd_expanded, args_expanded);
     run_command(&*cmd_expanded, args_expanded)
 }
 
@@ -121,6 +129,11 @@ fn main() {
         (@arg CONFIG: -c --config +takes_value "CONFIG file with handlers settings")
         (@arg install: -i --install "Install custom handles to the system")
     ).get_matches();
+
+    if matches.is_present("install") {
+        println!("install not implemented");
+        ::std::process::exit(0);
+    }
 
     let url_arg = matches.value_of("URL").unwrap(); // URL is required an will always be Some
     let config_file = matches.value_of("CONFIG").unwrap_or(CONFIG_FILE_NAME);

@@ -87,7 +87,7 @@ fn expand_args(str: &str, argv: Vec<&str>) -> String {
 }
 
 // Split a string containing space separated args into a vector considering quoted strings with spaces
-fn split_args<'a>(args: &'a str) -> Vec<&'a str> {
+fn split_args(args: &str) -> Vec<&str> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r#"[^\s"']+|"([^"]*)"|'([^']*)'"#).unwrap();
     }

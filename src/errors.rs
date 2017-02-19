@@ -1,8 +1,7 @@
-
-
 error_chain! {
     errors {
         HandlerNotFound
+        UnknownError
     }
     foreign_links {
         Url(::url::ParseError);

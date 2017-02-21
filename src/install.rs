@@ -56,7 +56,7 @@ pub fn uninstall_all() -> Result<()> {
 
 #[cfg(unix)]
 #[allow(unused_variables)]
-pub fn install_handler(scheme: &str, command: &str) -> Result<()> {
+pub fn install_handler(scheme: &str, command: &str, cfg: &PathBuf) -> Result<()> {
     Err("install not implemented".into())
 }
 

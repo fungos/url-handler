@@ -3,12 +3,13 @@
 #[cfg(windows)] use std::path::Path;
 
 use errors::*;
+use std::path::PathBuf;
 
 #[cfg(windows)]
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
 #[cfg(windows)]
-pub fn install_handler(scheme: &str, command: &str) -> Result<()> {
+pub fn install_handler(scheme: &str, command: &str, cfg: &PathBuf) -> Result<()> {
     let hcr = RegKey::predef(HKEY_CLASSES_ROOT);
     let path = Path::new(scheme);
     let key = hcr.create_subkey(&path)?;
@@ -17,7 +18,7 @@ pub fn install_handler(scheme: &str, command: &str) -> Result<()> {
 
     let path = path.join("shell").join("open").join("command");
     let key = hcr.create_subkey(&path)?;
-    let cmd = &*format!(r#""{}" "%1""#, command);
+    let cmd = &*format!(r#""{}" "%1" "--config" "{}" "#, command, cfg.to_string_lossy()); // FIXME
     key.set_value("", &cmd)?;
 
     Ok(())

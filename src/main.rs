@@ -1,6 +1,8 @@
 #![cfg_attr(feature="clippy", feature(plugin))]
 #![cfg_attr(feature="clippy", plugin(clippy))]
 #![recursion_limit = "1024"]
+//#![feature(windows_subsystem)]
+//#![windows_subsystem = "windows"]
 #[cfg(windows)] extern crate winreg;
 #[macro_use] extern crate error_chain;
 #[macro_use] extern crate clap;
@@ -20,8 +22,9 @@ use std::io::Read;
 use std::process::Command;
 use url::Url;
 use regex::Regex;
+use std::path::PathBuf;
 
-const CONFIG_FILE_NAME: &'static str = "url-handler.toml";
+const CONFIG_FILE_NAME: &'static str = "./url-handler.toml";
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Deserialize)]
@@ -42,16 +45,16 @@ struct Options {
     list_all: bool,
 }
 
-fn load_config(cfg: &str) -> Result<Config> {
+fn load_config(cfg: &PathBuf) -> Result<Config> {
     let mut config_file = fs::File::open(cfg)
-        .chain_err(|| format!("couldn't find {}", cfg))?;
+        .chain_err(|| format!("couldn't find {}", cfg.to_string_lossy()))?;
     let mut contents = String::new();
     config_file.read_to_string(&mut contents)?;
     toml::from_str(&*contents).chain_err(|| "Could not load config file.")
 }
 
 fn run_command(cmd: &str, args: Vec<&str>) -> Result<i32> {
-    Command::new(cmd).args(args).spawn()?;
+    Command::new(cmd).args(&args).spawn()?;
     Ok(0)
 }
 
@@ -110,8 +113,7 @@ fn get_args(url: &Url) -> Vec<&str> {
 }
 
 fn run(arg: Option<&str>, cfg: &str, opt: Options) -> Result<i32> {
-    let config = load_config(cfg)?;
-
+    let cfg = fs::canonicalize(&cfg)?;
     if opt.list_all {
         let v = install::list_all();
         if v.is_empty() {
@@ -129,12 +131,14 @@ fn run(arg: Option<&str>, cfg: &str, opt: Options) -> Result<i32> {
         install::uninstall_all()?;
     }
 
+    let config = load_config(&cfg)?;
+
     if opt.install {
         let cmd = std::env::current_exe()?;
         let cmd = cmd.to_str().ok_or(ErrorKind::UnknownError)?;
         for it in &config.handler {
             println!("Installing {}...", &*it.scheme);
-            install::install_handler(&*it.scheme, cmd)?;
+            install::install_handler(&*it.scheme, cmd, &cfg)?;
         }
         return Ok(0)
     }

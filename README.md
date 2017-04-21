@@ -1,5 +1,6 @@
 url-handler
 ===========
+[![Build Status](https://travis-ci.org/fungos/url-handler.svg)](https://travis-ci.org/fungos/url-handler) 
 
 An application to do generic custom URL-to-command translation.
 

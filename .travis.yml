@@ -30,5 +30,10 @@ branches:
     - master
 addons:
   apt:
+    sources:
+      - kalakris-cmake
     packages:
-      - libssl-dev
+      - cmake
+      - libcurl4-openssl-dev
+      - libelf-dev
+      - libdw-dev

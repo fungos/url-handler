@@ -53,8 +53,8 @@ fn load_config(cfg: &PathBuf) -> Result<Config> {
     toml::from_str(&*contents).chain_err(|| "Could not load config file.")
 }
 
-fn run_command(cmd: &str, args: Vec<&str>) -> Result<i32> {
-    Command::new(cmd).args(&args).spawn()?;
+fn run_command(cmd: &str, args: &[String]) -> Result<i32> {
+    Command::new(cmd).args(args).spawn()?;
     Ok(0)
 }
 
@@ -74,6 +74,18 @@ fn expand_env(str: &str) -> Result<String> {
     Ok(str_expanded)
 }
 
+#[test]
+fn expand_env_basic() {
+    std::env::set_var("1", "1");
+    std::env::set_var("2", "2");
+    std::env::set_var("3", "3");
+    assert_eq!(expand_env("test %1%").unwrap(), String::from("test 1"));
+    assert_eq!(expand_env("test %1% %3% %2%").unwrap(), String::from("test 1 3 2"));
+    assert_eq!(expand_env("test %3% %2% %1%").unwrap(), String::from("test 3 2 1"));
+    assert_eq!(expand_env("repeat %1% %2% %1%").unwrap(), String::from("repeat 1 2 1"));
+    assert_eq!(expand_env("concat %1%%1%%1% %2%x").unwrap(), String::from("concat 111 2x"));
+}
+
 // Expand named parameters: {key} -> value
 fn expand_named(str: &str, url: &Url) -> String {
     let params = url.query_pairs();
@@ -84,8 +96,35 @@ fn expand_named(str: &str, url: &Url) -> String {
     args
 }
 
-// Expand arguments %0 %1 %2 ...
-fn expand_args(str: &str, argv: Vec<&str>) -> String {
+#[test]
+fn expand_named_basic() {
+    assert_eq!(expand_named("test {arg}", &Url::parse("x://?arg=replaced").unwrap()), String::from("test replaced"));
+    assert_eq!(expand_named("test {1} {3} {2}", &Url::parse("x://?1=1&2=2&3=3").unwrap()), String::from("test 1 3 2"));
+    assert_eq!(expand_named("test {3} {2} {1}", &Url::parse("x://?2=2&1=1&3=3").unwrap()), String::from("test 3 2 1"));
+    assert_eq!(expand_named("repeat {1} {2} {1}", &Url::parse("x://?1=1&2=2").unwrap()), String::from("repeat 1 2 1"));
+    assert_eq!(expand_named("concat {1}{1}{1} {2}x", &Url::parse("x://?1=1&2=2").unwrap()), String::from("concat 111 2x"));
+    assert_eq!(expand_named("missing {1} {2} {3}", &Url::parse("x://?1=1&2=2").unwrap()), String::from("missing 1 2 {3}"));
+    assert_eq!(expand_named("extra {1} {3}", &Url::parse("x://?1=1&2=2&3=3").unwrap()), String::from("extra 1 3"));
+}
+
+#[test]
+fn expand_named_real_world() {
+    assert_eq!(
+        expand_named(r#"cargo run --bin {app} -- --input="{input}" -f"#, &Url::parse("x://?app=url-handler&input=Some%20input").unwrap()),
+        String::from(r#"cargo run --bin url-handler -- --input="Some input" -f"#)
+    );
+}
+
+#[test]
+fn expand_named_quoted() {
+    assert_eq!(
+        expand_named(r#"{cmd} "lorem ipsum "{msg}" sit amet""#, &Url::parse("x://?cmd=echo&msg='dolor'").unwrap()),
+        String::from(r#"echo "lorem ipsum "'dolor'" sit amet""#)
+    );
+}
+
+// Expand arguments %1 %2 %3 ...
+fn expand_args(str: &str, argv: &[&str]) -> String {
     let mut args = String::from(str);
     for (i, &item) in argv.iter().enumerate() {
         args = str::replace(&*args, &*format!("%{}", i + 1), &*item);
@@ -93,14 +132,92 @@ fn expand_args(str: &str, argv: Vec<&str>) -> String {
     args
 }
 
+#[test]
+fn expand_args_basic() {
+    assert_eq!(expand_args("test %1", &["arg"]), String::from("test arg"));
+    assert_eq!(expand_args("test %1 %3 %2", &["1", "2", "3"]), String::from("test 1 3 2"));
+    assert_eq!(expand_args("test %3 %2 %1", &["1", "2", "3"]), String::from("test 3 2 1"));
+    assert_eq!(expand_args("repeat %1 %2 %1", &["1", "2"]), String::from("repeat 1 2 1"));
+    assert_eq!(expand_args("concat %1%1%1 %2x", &["1", "2"]), String::from("concat 111 2x"));
+    assert_eq!(expand_args("missing %1 %2 %3", &["1", "2"]), String::from("missing 1 2 %3"));
+    assert_eq!(expand_args("extra %1 %3", &["1", "2", "3"]), String::from("extra 1 3"));
+}
+
+#[test]
+fn expand_args_real_world() {
+    assert_eq!(
+        expand_args(r#"cargo run --bin %1 -- --input="%2" -f"#, &["url-handler", "Some input"]),
+        String::from(r#"cargo run --bin url-handler -- --input="Some input" -f"#)
+    );
+}
+
+#[test]
+fn expand_args_nested_quotes() {
+    assert_eq!(
+        expand_args(r#"%2 "lorem ipsum '%1' sit amet""#, &["dolor", "echo"]),
+        String::from(r#"echo "lorem ipsum 'dolor' sit amet""#)
+    );
+
+    assert_eq!(
+        expand_args(r#"%1 "lorem ipsum ('%2 "%2is" %3') sit amet""#, &["echo", "dolor", "septetur"]),
+        String::from(r#"echo "lorem ipsum ('dolor "doloris" septetur') sit amet""#)
+    );
+}
+
 // Split a string containing space separated args into a vector respecting quoted strings
-fn split_args(args: &str) -> Vec<&str> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r#"[^\s"']+|"([^"]*)"|'([^']*)'"#).unwrap();
+fn split_args(args: &str) -> Vec<String> {
+    let mut res = Vec::new();
+    let mut current_arg = String::new();
+    let mut in_quote = Vec::new();
+    for c in args.chars() {
+        if in_quote.is_empty() && c.is_whitespace() {
+            res.push(current_arg);
+            current_arg = String::new();
+            continue;
+        }
+        current_arg.push(c);
+        if c == '"' || c == '\'' {
+            if in_quote.last() == Some(&c) {
+                in_quote.pop();
+            } else {
+                in_quote.push(c);
+            }
+        }
     }
-    RE.captures_iter(args)
-        .map(|cap| cap.get(0).unwrap().as_str().trim_matches('"'))
-        .collect()
+    if !current_arg.is_empty() {
+        res.push(current_arg);
+    }
+    res
+}
+
+#[test]
+fn split_args_basic() {
+    assert_eq!(split_args("test arg"), vec!["test", "arg"]);
+    assert_eq!(split_args(r#"test "arg""#), vec!["test", "\"arg\""]);
+    assert_eq!(split_args(r#"test "arg 1 2""#), vec!["test", "\"arg 1 2\""]);
+    assert_eq!(split_args(r#"test 'arg'"#), vec!["test", "\'arg\'"]);
+    assert_eq!(split_args(r#"test 'arg 1 2'"#), vec!["test", "\'arg 1 2\'"]);
+}
+
+#[test]
+fn split_args_real_world() {
+    assert_eq!(
+        split_args(r#"cargo run --bin url-handler -- --input="Some input" -f"#),
+        vec!["cargo", "run", "--bin", "url-handler", "--", "--input=\"Some input\"", "-f"]
+    );
+}
+
+#[test]
+fn split_args_nested_quotes() {
+    assert_eq!(
+        split_args(r#"echo "lorem ipsum 'dolor' sit amet""#),
+        vec!["echo", "\"lorem ipsum 'dolor' sit amet\""]
+    );
+
+    assert_eq!(
+        split_args(r#"echo "lorem ipsum ('dolor "doloris" septetur') sit amet""#),
+        vec!["echo", "\"lorem ipsum ('dolor \"doloris\" septetur') sit amet\""]
+    );
 }
 
 // Anything after the scheme and before parameters "?" is considered a numbered argument
@@ -112,7 +229,7 @@ fn get_args(url: &Url) -> Vec<&str> {
     }
 }
 
-fn run(arg: Option<&str>, cfg: &str, opt: Options) -> Result<i32> {
+fn run(arg: Option<&str>, cfg: &str, opt: &Options) -> Result<i32> {
     let cfg = fs::canonicalize(&cfg)?;
     if opt.list_all {
         let v = install::list_all();
@@ -159,12 +276,12 @@ fn run(arg: Option<&str>, cfg: &str, opt: Options) -> Result<i32> {
 
             let handler_args = handler.args.unwrap_or_default();
             let args_expanded = expand_named(&handler_args, &url);
-            let args_expanded = expand_args(&*args_expanded, args);
+            let args_expanded = expand_args(&*args_expanded, &args);
             let args_expanded = expand_env(&*args_expanded)?;
             let cmd_expanded = &*expand_env(&*handler.command)?;
 
             //println!("{} {:?}", cmd_expanded, args_expanded);
-            run_command(&*cmd_expanded, split_args(&*args_expanded))
+            run_command(&*cmd_expanded, &split_args(&*args_expanded))
         },
         None => Ok(0)
     }
@@ -190,7 +307,7 @@ fn main() {
         list_all: matches.is_present("list")
     };
 
-    let code = match run(url_arg, config_file, options) {
+    let code = match run(url_arg, config_file, &options) {
         Err(ref e) => {
             use ::std::io::Write;
             let stderr = &mut ::std::io::stderr();

@@ -1,0 +1,30 @@
+sudo: false
+language: rust
+cache: cargo
+rust:
+  - 1.16.0
+  - stable
+  - beta
+  - nightly
+matrix:
+  include:
+  - rust: nightly
+    env: CLIPPY=YESPLEASE
+    script: |
+        cargo +nightly install clippy
+        cargo +nightly clippy
+before_script:
+- |
+  cargo install cargo-travis &&
+  export PATH=$HOME/.local/bin:$PATH
+script:
+- |
+  cargo build &&
+  cargo test &&
+  cargo bench
+notifications:
+  email:
+    on_success: never
+branches:
+  only:
+    - master

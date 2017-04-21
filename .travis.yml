@@ -28,3 +28,7 @@ notifications:
 branches:
   only:
     - master
+addons:
+  apt:
+    packages:
+      - libssl-dev
